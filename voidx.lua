@@ -1,4 +1,4 @@
--- VOID X CLIENT | Tabbed GUI | Blox Fruits (Sea 1/2/3)
+-- VOID X CLIENT | Tabbed GUI + Config | Blox Fruits (Sea 1/2/3)
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
@@ -14,7 +14,10 @@ local running = true
 local state = {
     chest=false, level=false, grind=false, fruit=false, store=false,
     fruitesp=false, chestesp=false, hop=false, antiafk=true, noclip=true,
+    fastattack=true, autoclick=true, bring=false,
 }
+local cfg = {weaponType = "Melee", weaponName = nil, height = 10}
+local WEAPON_TYPES = {"Melee", "Sword", "Gun", "Blox Fruit"}
 local stats = {chests = 0, fruits = 0, kills = 0}
 
 local conns = {}
@@ -178,7 +181,6 @@ grad.Color = ColorSequence.new({
 })
 keep(RunService.Heartbeat:Connect(function() grad.Rotation = (grad.Rotation + 1.5) % 360 end))
 
--- Generic draggable helper (mouse + touch). Returns a function: did the last press move?
 local function makeDraggable(handle, target)
     local dragging, dragStart, startPos, moved = false, nil, nil, false
     keep(handle.InputBegan:Connect(function(input)
@@ -267,7 +269,7 @@ sidebar.BorderSizePixel = 0
 sidebar.Parent = body
 Instance.new("UICorner", sidebar).CornerRadius = UDim.new(0, 10)
 local sl = Instance.new("UIListLayout", sidebar)
-sl.Padding = UDim.new(0, 6)
+sl.Padding = UDim.new(0, 5)
 sl.SortOrder = Enum.SortOrder.LayoutOrder
 local sp = Instance.new("UIPadding", sidebar)
 sp.PaddingTop, sp.PaddingLeft, sp.PaddingRight = UDim.new(0, 6), UDim.new(0, 5), UDim.new(0, 5)
@@ -278,7 +280,7 @@ content.Position = UDim2.new(0, 90, 0, 4)
 content.BackgroundTransparency = 1
 content.Parent = body
 
-local pages, tabButtons = {}, {}
+local pages, tabButtons, onTabSelected = {}, {}, {}
 local order = 0
 local function nextOrder() order += 1 return order end
 
@@ -291,11 +293,12 @@ local function selectTab(name)
             TextColor3 = on and Color3.new(1, 1, 1) or C.dim,
         }):Play()
     end
+    if onTabSelected[name] then onTabSelected[name]() end
 end
 
 local function newTab(name, layoutOrder)
     local b = Instance.new("TextButton")
-    b.Size = UDim2.new(1, 0, 0, 30)
+    b.Size = UDim2.new(1, 0, 0, 28)
     b.LayoutOrder = layoutOrder
     b.BackgroundColor3 = C.off
     b.Text = name
@@ -328,9 +331,10 @@ local function newTab(name, layoutOrder)
 end
 
 local farmPage = newTab("Farm", 1)
-local visualPage = newTab("Visuals", 2)
-local miscPage = newTab("Misc", 3)
-local infoPage = newTab("Info", 4)
+local configPage = newTab("Config", 2)
+local visualPage = newTab("Visuals", 3)
+local miscPage = newTab("Misc", 4)
+local infoPage = newTab("Info", 5)
 
 ---------------------------------------------------------------------
 -- UI COMPONENTS
@@ -413,7 +417,7 @@ local function makeButton(page, text, callback)
     return b
 end
 
-local function makeStepper(page, name, getText, onChange)
+local function makeStepper(page, getText, onChange, step)
     local row = makeRow(page)
     local lbl = newLabel(row, getText(), UDim2.new(1, -80, 1, 0), UDim2.new(0, 10, 0, 0), 12, C.text)
     local function btn(text, xOff, delta)
@@ -433,8 +437,8 @@ local function makeStepper(page, name, getText, onChange)
             lbl.Text = getText()
         end)
     end
-    btn("-", -66, -25)
-    btn("+", -34, 25)
+    btn("-", -66, -step)
+    btn("+", -34, step)
 end
 
 local function makeInfo(page)
@@ -443,7 +447,7 @@ local function makeInfo(page)
 end
 
 ---------------------------------------------------------------------
--- BUILD TABS
+-- FARM TAB
 ---------------------------------------------------------------------
 makeSection(farmPage, "COLLECT")
 makeToggle(farmPage, "Collect All Chests", "chest")
@@ -453,16 +457,96 @@ makeSection(farmPage, "COMBAT")
 makeToggle(farmPage, "Auto Farm Level", "level")
 makeToggle(farmPage, "Auto Grind Closest Mob", "grind")
 
+---------------------------------------------------------------------
+-- CONFIG TAB (weapon + combat settings)
+---------------------------------------------------------------------
+makeSection(configPage, "WEAPON")
+local weaponInfo = makeInfo(configPage)
+local typeBtn
+typeBtn = makeButton(configPage, "Weapon Type: " .. cfg.weaponType, function()
+    local idx = table.find(WEAPON_TYPES, cfg.weaponType) or 1
+    cfg.weaponType = WEAPON_TYPES[idx % #WEAPON_TYPES + 1]
+    cfg.weaponName = nil -- type mode = auto pick by type
+    typeBtn.Text = "Weapon Type: " .. cfg.weaponType
+    if onTabSelected.Config then onTabSelected.Config() end
+end)
+makeSection(configPage, "OR PICK A SPECIFIC TOOL")
+
+local weaponHolder = Instance.new("Frame")
+weaponHolder.Size = UDim2.new(1, 0, 0, 0)
+weaponHolder.AutomaticSize = Enum.AutomaticSize.Y
+weaponHolder.BackgroundTransparency = 1
+weaponHolder.LayoutOrder = nextOrder()
+weaponHolder.Parent = configPage
+local wl = Instance.new("UIListLayout", weaponHolder)
+wl.Padding = UDim.new(0, 4)
+
+local function updateWeaponLabel()
+    weaponInfo.Text = cfg.weaponName and ("Using: " .. cfg.weaponName)
+        or ("Using: Auto (" .. cfg.weaponType .. ")")
+end
+
+local function rebuildWeaponList()
+    for _, c in ipairs(weaponHolder:GetChildren()) do
+        if c:IsA("TextButton") then c:Destroy() end
+    end
+    local seen = {}
+    local function add(t)
+        if t:IsA("Tool") and not seen[t.Name] then
+            seen[t.Name] = true
+            local selected = (cfg.weaponName == t.Name)
+            local b = Instance.new("TextButton")
+            b.Size = UDim2.new(1, 0, 0, 28)
+            b.BackgroundColor3 = selected and C.pink or C.off
+            b.Text = ("%s  [%s]"):format(t.Name, (t.ToolTip ~= "" and t.ToolTip) or "?")
+            b.Font = Enum.Font.GothamBold
+            b.TextSize = 11
+            b.TextColor3 = selected and Color3.new(1, 1, 1) or C.text
+            b.TextTruncate = Enum.TextTruncate.AtEnd
+            b.AutoButtonColor = false
+            b.Parent = weaponHolder
+            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+            b.MouseButton1Click:Connect(function()
+                cfg.weaponName = t.Name
+                updateWeaponLabel()
+                rebuildWeaponList()
+            end)
+        end
+    end
+    local char = player.Character
+    if char then for _, t in ipairs(char:GetChildren()) do add(t) end end
+    for _, t in ipairs(player.Backpack:GetChildren()) do add(t) end
+    updateWeaponLabel()
+end
+onTabSelected.Config = rebuildWeaponList
+
+makeButton(configPage, "Refresh Tool List", rebuildWeaponList)
+makeButton(configPage, "Clear Pick (Auto by Type)", function()
+    cfg.weaponName = nil
+    rebuildWeaponList()
+end)
+
+makeSection(configPage, "COMBAT SETTINGS")
+makeToggle(configPage, "Fast Attack (Remotes)", "fastattack")
+makeToggle(configPage, "Auto Click / Activate", "autoclick")
+makeToggle(configPage, "Bring Mobs", "bring")
+makeStepper(configPage, function() return "Hover Height: " .. cfg.height end, function(d)
+    cfg.height = math.clamp(cfg.height + d, 2, 40)
+end, 2)
+
+---------------------------------------------------------------------
+-- VISUALS / MISC / INFO TABS
+---------------------------------------------------------------------
 makeSection(visualPage, "ESP")
 makeToggle(visualPage, "Fruit ESP", "fruitesp")
 makeToggle(visualPage, "Chest ESP", "chestesp")
 
-local function destroyGui() end -- assigned below
+local destroyGui = function() end
 
 makeSection(miscPage, "MOVEMENT")
-makeStepper(miscPage, "Speed", function() return "Speed: " .. speed end, function(d)
+makeStepper(miscPage, function() return "Speed: " .. speed end, function(d)
     speed = math.clamp(speed + d, 100, 400)
-end)
+end, 25)
 makeToggle(miscPage, "Noclip While Farming", "noclip")
 makeSection(miscPage, "SERVER")
 makeToggle(miscPage, "Auto Server Hop", "hop")
@@ -566,7 +650,6 @@ local function partOf(o)
     return o:FindFirstChildWhichIsA("BasePart", true)
 end
 
--- Chests: visited tracked by position so re-created chests aren't repeated
 local visited = {}
 local function keyOf(obj)
     local p = posOf(obj)
@@ -663,7 +746,6 @@ local function collect(root, obj)
     return false
 end
 
--- Noclip while farming
 keep(RunService.Stepped:Connect(function()
     if not (state.noclip and anyFarm()) then return end
     local _, char = getRoot()
@@ -675,19 +757,8 @@ keep(RunService.Stepped:Connect(function()
 end))
 
 ---------------------------------------------------------------------
--- COMBAT
+-- COMBAT (weapon select, equip, click, fast attack, bring mobs)
 ---------------------------------------------------------------------
-local function equipMelee()
-    local _, char, hum = getRoot()
-    if not hum then return end
-    for _, t in ipairs(char:GetChildren()) do
-        if t:IsA("Tool") and t.ToolTip == "Melee" then return end
-    end
-    for _, t in ipairs(player.Backpack:GetChildren()) do
-        if t:IsA("Tool") and t.ToolTip == "Melee" then hum:EquipTool(t) return end
-    end
-end
-
 local function aliveMobs()
     local list = {}
     local enemies = workspace:FindFirstChild("Enemies")
@@ -721,21 +792,105 @@ local function nearestMobAny(root)
     return best
 end
 
+-- Is this tool the weapon the player picked? (used to find it AND to protect it from Auto Store)
+local function isSelectedWeapon(t)
+    if not t:IsA("Tool") then return false end
+    if cfg.weaponName then return t.Name == cfg.weaponName end
+    return t.ToolTip == cfg.weaponType
+end
+
+local function findWeapon()
+    local char = player.Character
+    if char then
+        for _, t in ipairs(char:GetChildren()) do
+            if isSelectedWeapon(t) then return t end
+        end
+    end
+    for _, t in ipairs(player.Backpack:GetChildren()) do
+        if isSelectedWeapon(t) then return t end
+    end
+end
+
+local function equipWeapon()
+    local _, char, hum = getRoot()
+    if not hum then return end
+    local tool = findWeapon()
+    if not tool then
+        refreshUI("Weapon not found: " .. (cfg.weaponName or cfg.weaponType))
+        return
+    end
+    if tool.Parent ~= char then
+        pcall(function() hum:UnequipTools() end)
+        hum:EquipTool(tool)
+    end
+    return tool
+end
+
+local function clickOnce(tool)
+    pcall(function() tool:Activate() end)
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:Button1Down(Vector2.new(1280, 672))
+        VirtualUser:Button1Up(Vector2.new(1280, 672))
+    end)
+end
+
+-- Best-effort: fires the game's own attack remotes. The names/args can change after updates.
+local function fastHit(rootPos)
+    local mods = ReplicatedStorage:FindFirstChild("Modules")
+    local net = mods and mods:FindFirstChild("Net")
+    local atk = net and net:FindFirstChild("RE/RegisterAttack")
+    local hit = net and net:FindFirstChild("RE/RegisterHit")
+    if not (atk and hit) then return end
+    local targets, first = {}, nil
+    for _, m in ipairs(aliveMobs()) do
+        local h = m:FindFirstChild("HumanoidRootPart")
+        if h and (h.Position - rootPos).Magnitude <= 60 then
+            local part = m:FindFirstChild("Head") or h
+            table.insert(targets, {m, part})
+            first = first or part
+        end
+    end
+    if not first then return end
+    pcall(function()
+        atk:FireServer(0)
+        hit:FireServer(first, targets)
+    end)
+end
+
+local function bringMobs(target)
+    local thrp = target:FindFirstChild("HumanoidRootPart")
+    if not thrp then return end
+    for _, m in ipairs(aliveMobs()) do
+        if m ~= target and m.Name == target.Name then
+            local h = m.HumanoidRootPart
+            if (h.Position - thrp.Position).Magnitude < 250 then
+                h.CFrame = thrp.CFrame
+                h.CanCollide = false
+            end
+        end
+    end
+end
+
 local function attackMob(mob, flagKey)
-    equipMelee()
     local hum = mob:FindFirstChildOfClass("Humanoid")
     local hrp = mob:FindFirstChild("HumanoidRootPart")
     if not (hum and hrp) then return end
+    pcall(function()
+        if sethiddenproperty then sethiddenproperty(player, "SimulationRadius", math.huge) end
+    end)
     local t0 = tick()
     while running and state[flagKey] and mob.Parent and hum.Health > 0 and tick() - t0 < 60 do
         local r = getRoot()
         if not r then break end
-        r.CFrame = hrp.CFrame * CFrame.new(0, 12, 0) * CFrame.Angles(math.rad(-90), 0, 0)
+        local tool = equipWeapon()
+        r.CFrame = hrp.CFrame * CFrame.new(0, cfg.height, 0) * CFrame.Angles(math.rad(-90), 0, 0)
         r.AssemblyLinearVelocity = Vector3.zero
-        pcall(function()
-            VirtualUser:CaptureController()
-            VirtualUser:Button1Down(Vector2.new(1280, 672))
-        end)
+        if state.bring then bringMobs(mob) end
+        if tool then
+            if state.fastattack then fastHit(r.Position) end
+            if state.autoclick then clickOnce(tool) end
+        end
         task.wait(0.1)
     end
     if hum.Health <= 0 then stats.kills += 1 end
@@ -749,7 +904,7 @@ local function grindStep(root)
         return
     end
     refreshUI("Grinding " .. mob.Name)
-    flyTo(root, mob.HumanoidRootPart.Position + Vector3.new(0, 12, 0), function() return state.grind and mob.Parent end)
+    flyTo(root, mob.HumanoidRootPart.Position + Vector3.new(0, cfg.height, 0), function() return state.grind and mob.Parent end)
     attackMob(mob, "grind")
     refreshUI()
 end
@@ -878,7 +1033,7 @@ task.spawn(function()
 end)
 
 ---------------------------------------------------------------------
--- AUTO STORE FRUIT
+-- AUTO STORE FRUIT (never stores the fruit you picked as your weapon)
 ---------------------------------------------------------------------
 task.spawn(function()
     while running do
@@ -890,7 +1045,7 @@ task.spawn(function()
                 for _, c in ipairs({player.Backpack, player.Character}) do
                     if c then
                         for _, tool in ipairs(c:GetChildren()) do
-                            if tool:IsA("Tool") and tool.Name:find("Fruit") then
+                            if tool:IsA("Tool") and tool.Name:find("Fruit") and not isSelectedWeapon(tool) then
                                 local name = tool:GetAttribute("OriginalName") or tool.Name
                                 pcall(function() remote:InvokeServer("StoreFruit", name, tool) end)
                                 task.wait(0.5)
@@ -969,4 +1124,5 @@ destroyGui = function()
     gui:Destroy()
 end
 
+rebuildWeaponList()
 refreshUI("Ready (Sea " .. SEA .. ")")
