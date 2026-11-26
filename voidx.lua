@@ -1,4 +1,4 @@
--- VOID X CLIENT | Blox Fruits: Chest + Fruit + Store + ESP + Server Hop
+-- VOID X CLIENT | Blox Fruits: Chests + Fruit + Auto Level + Store + ESP + Hop
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
@@ -6,11 +6,41 @@ local CollectionService = game:GetService("CollectionService")
 local UserInputService = game:GetService("UserInputService")
 local TeleportService = game:GetService("TeleportService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local VirtualUser = game:GetService("VirtualUser")
 
 local player = Players.LocalPlayer
 local speed = 250
-local state = {chest = false, fruit = false, store = false, esp = false, hop = false}
-local stats = {chests = 0, fruits = 0}
+local state = {chest = false, fruit = false, level = false, store = false, esp = false, hop = false}
+local stats = {chests = 0, fruits = 0, kills = 0}
+
+-- Anti-AFK
+player.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
+
+-- QUEST TABLE (Sea 1). Edit if the game updates.
+-- {minLevel, maxLevel, mobName, questName, questIndex, questGiverPosition}
+local QUESTS = {
+    {1, 9,     "Bandit",           "BanditQuest1",   1, Vector3.new(1059, 16, 1550)},
+    {10, 14,   "Monkey",           "JungleQuest",    1, Vector3.new(-1598, 36, 153)},
+    {15, 29,   "Gorilla",          "JungleQuest",    2, Vector3.new(-1598, 36, 153)},
+    {30, 39,   "Pirate",           "BuggyQuest1",    1, Vector3.new(-1140, 5, 3825)},
+    {40, 59,   "Brute",            "BuggyQuest1",    2, Vector3.new(-1140, 5, 3825)},
+    {60, 74,   "Desert Bandit",    "DesertQuest",    1, Vector3.new(897, 6, 4390)},
+    {75, 89,   "Desert Officer",   "DesertQuest",    2, Vector3.new(897, 6, 4390)},
+    {90, 99,   "Snow Bandit",      "SnowQuest",      1, Vector3.new(1387, 87, -1298)},
+    {100, 119, "Snowman",          "SnowQuest",      2, Vector3.new(1387, 87, -1298)},
+    {120, 149, "Chief Petty Officer", "MarineQuest2", 1, Vector3.new(-5035, 29, 4324)},
+    {150, 174, "Sky Bandit",       "SkyQuest",       1, Vector3.new(-4842, 718, -2624)},
+    {175, 189, "Dark Master",      "SkyQuest",       2, Vector3.new(-4842, 718, -2624)},
+    {190, 209, "Prisoner",         "PrisonerQuest",  1, Vector3.new(5311, 1, 475)},
+    {210, 249, "Dangerous Prisoner","PrisonerQuest", 2, Vector3.new(5311, 1, 475)},
+    {250, 274, "Toga Warrior",     "ColosseumQuest", 1, Vector3.new(-1580, 6, -2986)},
+    {275, 299, "Gladiator",        "ColosseumQuest", 2, Vector3.new(-1580, 6, -2986)},
+    {300, 324, "Military Soldier", "MagmaQuest",     1, Vector3.new(-5313, 11, 8515)},
+    {325, 374, "Military Spy",     "MagmaQuest",     2, Vector3.new(-5313, 11, 8515)},
+}
 
 -- THEME
 local C = {
@@ -22,7 +52,7 @@ local C = {
     dim    = Color3.fromRGB(145, 128, 175),
     off    = Color3.fromRGB(42, 33, 62),
 }
-local FULL_H, HEAD_H = 350, 40
+local FULL_H, HEAD_H = 375, 40
 local minimized = false
 
 -- GUI root
@@ -39,14 +69,13 @@ gui.Parent = parent
 
 local frame = Instance.new("Frame")
 frame.Size = UDim2.new(0, 240, 0, FULL_H)
-frame.Position = UDim2.new(0.5, -120, 0.1, 0)
+frame.Position = UDim2.new(0.5, -120, 0.08, 0)
 frame.BackgroundColor3 = C.bg
 frame.BorderSizePixel = 0
 frame.ClipsDescendants = true
 frame.Parent = gui
 Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 14)
 
--- Animated gradient border
 local stroke = Instance.new("UIStroke", frame)
 stroke.Thickness = 2
 stroke.Color = Color3.new(1, 1, 1)
@@ -60,7 +89,6 @@ RunService.Heartbeat:Connect(function()
     grad.Rotation = (grad.Rotation + 1.5) % 360
 end)
 
--- Header
 local header = Instance.new("Frame")
 header.Size = UDim2.new(1, 0, 0, HEAD_H)
 header.BackgroundColor3 = C.panel
@@ -79,8 +107,7 @@ title.TextSize = 17
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.TextColor3 = Color3.new(1, 1, 1)
 title.Parent = header
-local tg = Instance.new("UIGradient", title)
-tg.Color = ColorSequence.new(C.purple, C.pink)
+Instance.new("UIGradient", title).Color = ColorSequence.new(C.purple, C.pink)
 
 local minBtn = Instance.new("TextButton")
 minBtn.Size = UDim2.new(0, 28, 0, 28)
@@ -94,7 +121,6 @@ minBtn.AutoButtonColor = false
 minBtn.Parent = header
 Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 8)
 
--- Body
 local body = Instance.new("Frame")
 body.Size = UDim2.new(1, 0, 1, -HEAD_H)
 body.Position = UDim2.new(0, 0, 0, HEAD_H)
@@ -114,7 +140,7 @@ local function makeLabel(text, size, pos, textSize, color, align, font)
     return l
 end
 
-local counter = makeLabel("Chests: 0  |  Fruits: 0", UDim2.new(1, 0, 0, 20), UDim2.new(0, 0, 0, 4), 12, C.pink)
+local counter = makeLabel("", UDim2.new(1, 0, 0, 20), UDim2.new(0, 0, 0, 4), 12, C.pink)
 counter.Parent = body
 
 local function makeRow(y)
@@ -164,14 +190,14 @@ local function makeToggle(name, key, index)
     end)
 end
 
-makeToggle("Auto Chest", "chest", 1)
-makeToggle("Auto Fruit", "fruit", 2)
-makeToggle("Auto Store Fruit", "store", 3)
-makeToggle("Fruit ESP", "esp", 4)
-makeToggle("Server Hop", "hop", 5)
+makeToggle("Collect All Chests", "chest", 1)
+makeToggle("Auto Farm Level", "level", 2)
+makeToggle("Auto Fruit", "fruit", 3)
+makeToggle("Auto Store Fruit", "store", 4)
+makeToggle("Fruit ESP", "esp", 5)
+makeToggle("Server Hop", "hop", 6)
 
--- Speed row
-local speedRow = makeRow(28 + 5 * 40)
+local speedRow = makeRow(28 + 6 * 40)
 local speedLabel = makeLabel("Speed: " .. speed, UDim2.new(1, -90, 1, 0), UDim2.new(0, 12, 0, 0), 13, C.text, Enum.TextXAlignment.Left)
 speedLabel.Parent = speedRow
 
@@ -195,10 +221,10 @@ end
 speedButton("-", -72, -25)
 speedButton("+", -38, 25)
 
-local statusLabel = makeLabel("Idle", UDim2.new(1, -20, 0, 18), UDim2.new(0, 10, 0, 28 + 5 * 40 + 40), 11, C.dim, nil, Enum.Font.Gotham)
+local statusLabel = makeLabel("Idle", UDim2.new(1, -20, 0, 18), UDim2.new(0, 10, 0, 28 + 6 * 40 + 40), 11, C.dim, nil, Enum.Font.Gotham)
 statusLabel.Parent = body
 
--- Dragging (header only, mouse + touch)
+-- Dragging (header, mouse + touch)
 do
     local dragging, dragStart, startPos
     header.InputBegan:Connect(function(input)
@@ -222,7 +248,6 @@ do
     end)
 end
 
--- Minimize
 minBtn.MouseButton1Click:Connect(function()
     minimized = not minimized
     minBtn.Text = minimized and "+" or "–"
@@ -232,16 +257,20 @@ minBtn.MouseButton1Click:Connect(function()
 end)
 
 local function refreshUI(msg)
-    counter.Text = ("Chests: %d  |  Fruits: %d"):format(stats.chests, stats.fruits)
+    counter.Text = ("Chests: %d | Fruits: %d | Kills: %d"):format(stats.chests, stats.fruits, stats.kills)
     if msg then statusLabel.Text = msg end
 end
 
 -- Helpers
+local function anyFarm()
+    return state.chest or state.fruit or state.level
+end
+
 local function getRoot()
     local char = player.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if hum and hum.Health > 0 then
-        return char:FindFirstChild("HumanoidRootPart"), char
+        return char:FindFirstChild("HumanoidRootPart"), char, hum
     end
 end
 
@@ -254,19 +283,22 @@ local function posOf(obj)
     end
 end
 
+-- Chests: tag, then ChestModels folder, then any "Chest" named object
 local function getChests()
-    local list = {}
-    for _, c in ipairs(CollectionService:GetTagged("_ChestTagged")) do table.insert(list, c) end
-    if #list == 0 then
-        local folder = workspace:FindFirstChild("ChestModels")
-        if folder then
-            for _, c in ipairs(folder:GetChildren()) do table.insert(list, c) end
+    local list, seen = {}, {}
+    local function add(c)
+        if c.Parent and not seen[c] then
+            seen[c] = true
+            table.insert(list, c)
         end
     end
-    if #list == 0 then
-        for _, c in ipairs(workspace:GetChildren()) do
-            if c.Name:match("^Chest%d*$") then table.insert(list, c) end
-        end
+    for _, c in ipairs(CollectionService:GetTagged("_ChestTagged")) do add(c) end
+    local folder = workspace:FindFirstChild("ChestModels")
+    if folder then
+        for _, c in ipairs(folder:GetChildren()) do add(c) end
+    end
+    for _, c in ipairs(workspace:GetChildren()) do
+        if c.Name:match("^Chest%d*$") then add(c) end
     end
     return list
 end
@@ -295,33 +327,50 @@ local function nearest(list, root)
     return best, bestDist
 end
 
-local function goTo(root, obj, dist, stillValid)
-    local target = posOf(obj)
-    if not target then return false end
+-- Fly to a position. Returns true if arrived.
+local function flyTo(root, pos, stillValid)
+    local dist = (pos - root.Position).Magnitude
     local tween = TweenService:Create(
         root,
         TweenInfo.new(math.max(dist / speed, 0.1), Enum.EasingStyle.Linear),
-        {CFrame = CFrame.new(target + Vector3.new(0, 2, 0))}
+        {CFrame = CFrame.new(pos)}
     )
     tween:Play()
     local t0 = tick()
-    while stillValid() and obj.Parent and tween.PlaybackState == Enum.PlaybackState.Playing
-    and tick() - t0 < 30 do
+    while stillValid() and tween.PlaybackState == Enum.PlaybackState.Playing and tick() - t0 < 45 do
         task.wait()
     end
+    local arrived = tween.PlaybackState == Enum.PlaybackState.Completed
     tween:Cancel()
-    if stillValid() and obj.Parent then
-        local p = posOf(obj)
-        if p then root.CFrame = CFrame.new(p) end
-        task.wait(0.3)
+    return arrived and stillValid()
+end
+
+-- Collect one object (chest/fruit)
+local function collect(root, obj)
+    local p = posOf(obj)
+    if not p then return false end
+    local ok = flyTo(root, p + Vector3.new(0, 2, 0), anyFarm)
+    if anyFarm() and obj.Parent then
+        local p2 = posOf(obj)
+        if p2 then root.CFrame = CFrame.new(p2) end
+        if firetouchinterest then
+            local part = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart", true)
+            if part then
+                pcall(function()
+                    firetouchinterest(root, part, 0)
+                    firetouchinterest(root, part, 1)
+                end)
+            end
+        end
+        task.wait(0.35)
         return true
     end
-    return false
+    return ok
 end
 
 -- Noclip while farming
 RunService.Stepped:Connect(function()
-    if not (state.chest or state.fruit) then return end
+    if not anyFarm() then return end
     local _, char = getRoot()
     if char then
         for _, v in ipairs(char:GetDescendants()) do
@@ -329,6 +378,101 @@ RunService.Stepped:Connect(function()
         end
     end
 end)
+
+-- AUTO FARM LEVEL
+local function currentQuest()
+    local ok, lvl = pcall(function() return player.Data.Level.Value end)
+    if not ok then return end
+    for _, q in ipairs(QUESTS) do
+        if lvl >= q[1] and lvl <= q[2] then
+            return {mob = q[3], name = q[4], index = q[5], pos = q[6], lvl = lvl}
+        end
+    end
+    return nil, lvl
+end
+
+local function questActive()
+    local ok, vis = pcall(function() return player.PlayerGui.Main.Quest.Visible end)
+    return ok and vis
+end
+
+local function equipMelee()
+    local _, char, hum = getRoot()
+    if not hum then return end
+    for _, t in ipairs(char:GetChildren()) do
+        if t:IsA("Tool") and t.ToolTip == "Melee" then return end
+    end
+    for _, t in ipairs(player.Backpack:GetChildren()) do
+        if t:IsA("Tool") and t.ToolTip == "Melee" then
+            hum:EquipTool(t)
+            return
+        end
+    end
+end
+
+local function nearestMob(name, root)
+    local enemies = workspace:FindFirstChild("Enemies")
+    if not enemies then return end
+    local best, bestDist
+    for _, m in ipairs(enemies:GetChildren()) do
+        local hum = m:FindFirstChildOfClass("Humanoid")
+        local hrp = m:FindFirstChild("HumanoidRootPart")
+        if m.Name == name and hum and hrp and hum.Health > 0 then
+            local d = (hrp.Position - root.Position).Magnitude
+            if not bestDist or d < bestDist then best, bestDist = m, d end
+        end
+    end
+    return best
+end
+
+local function levelStep(root)
+    local q, lvl = currentQuest()
+    if not q then
+        refreshUI("No quest data for level " .. tostring(lvl or "?"))
+        task.wait(2)
+        return
+    end
+
+    if not questActive() then
+        refreshUI("Getting quest: " .. q.mob)
+        if flyTo(root, q.pos + Vector3.new(0, 3, 0), function() return state.level end) then
+            local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+            local remote = remotes and remotes:FindFirstChild("CommF_")
+            if remote then
+                pcall(function() remote:InvokeServer("StartQuest", q.name, q.index) end)
+            end
+            task.wait(0.6)
+        end
+        return
+    end
+
+    local mob = nearestMob(q.mob, root)
+    if not mob then
+        refreshUI("Searching for " .. q.mob .. "...")
+        flyTo(root, q.pos + Vector3.new(0, 25, 0), function() return state.level and not nearestMob(q.mob, root) end)
+        task.wait(0.5)
+        return
+    end
+
+    refreshUI("Farming " .. q.mob .. " (Lv " .. q.lvl .. ")")
+    equipMelee()
+    local hum = mob:FindFirstChildOfClass("Humanoid")
+    local hrp = mob:FindFirstChild("HumanoidRootPart")
+    local t0 = tick()
+    while state.level and mob.Parent and hum.Health > 0 and tick() - t0 < 60 do
+        local r = getRoot()
+        if not r then break end
+        r.CFrame = hrp.CFrame * CFrame.new(0, 12, 0) * CFrame.Angles(math.rad(-90), 0, 0)
+        r.AssemblyLinearVelocity = Vector3.zero
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:Button1Down(Vector2.new(1280, 672))
+        end)
+        task.wait(0.1)
+    end
+    if hum.Health <= 0 then stats.kills += 1 end
+    refreshUI()
+end
 
 -- Server hop
 local hopping = false
@@ -351,32 +495,34 @@ local function serverHop()
     hopping = false
 end
 
--- Main farm loop (fruits take priority over chests)
+-- Main loop: fruits > chests > level
 task.spawn(function()
     local emptySince
     while true do
         task.wait(0.1)
         local root = getRoot()
-        if root and (state.chest or state.fruit) then
-            local target, dist, kind
+        if root and anyFarm() then
+            local target, kind
 
             if state.fruit then
-                local f, d = nearest(getFruits(), root)
-                if f then target, dist, kind = f, d, "fruit" end
+                local f = nearest(getFruits(), root)
+                if f then target, kind = f, "fruit" end
             end
             if not target and state.chest then
-                local c, d = nearest(getChests(), root)
-                if c then target, dist, kind = c, d, "chest" end
+                local c = nearest(getChests(), root)
+                if c then target, kind = c, "chest" end
             end
 
             if target then
                 emptySince = nil
-                refreshUI("Going to " .. kind .. "...")
-                local ok = goTo(root, target, dist, function() return state.chest or state.fruit end)
-                if ok then
+                refreshUI("Collecting " .. kind .. "...")
+                if collect(root, target) and not target.Parent then
                     if kind == "fruit" then stats.fruits += 1 else stats.chests += 1 end
                     refreshUI("Collected " .. kind)
                 end
+            elseif state.level then
+                emptySince = nil
+                levelStep(root)
             else
                 emptySince = emptySince or tick()
                 refreshUI("Nothing left")
@@ -414,7 +560,7 @@ task.spawn(function()
     end
 end)
 
--- Fruit ESP (neon pink)
+-- Fruit ESP
 task.spawn(function()
     while true do
         task.wait(0.5)
