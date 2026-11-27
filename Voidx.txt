@@ -1,1 +1,1 @@
-loadstring(game:HttpGet("https://raw.githubusercontent.com/cashmaster2000/VOIDX-CLIENT/refs/heads/main/voidx.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/cashmaster2000/VOIDX-CLIENT/refs/heads/main/voidx(1).lua"))()
