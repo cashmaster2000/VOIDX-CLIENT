@@ -1,5 +1,5 @@
--- voidx.lua | VOID X | Blox Fruits Auto Farm + Auto Raid + FOV Aim Assist + Key Loop
--- v4: all features in one draggable GUI, single cleanup, re-executable
+-- voidx.lua | VOID X | Blox Fruits Auto Farm + Auto Raid + FOV Aim Assist + Key Loop + Race Reroll
+-- v5: adds auto race reroll with wanted-race stop and arg capture
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -15,7 +15,6 @@ local camera = workspace.CurrentCamera
 
 local env = (getgenv and getgenv()) or _G
 
--- Clean up this script and any older standalone versions
 for _, name in ipairs({"VOIDX_CLEANUP", "COMBO_CLEANUP", "FOV_CLEANUP", "KEYLOOP_CLEANUP"}) do
     if env[name] then pcall(env[name]) end
 end
@@ -25,13 +24,14 @@ local function alive() return env.VOIDX_TOKEN == TOKEN end
 
 env.AutoFarmNearest = false
 env.AutoRaid = false
+env.AutoReroll = false
 
 -- ============ SETTINGS ============
 local RADIUS = 150
 local RAID_RADIUS = 600
 local HEIGHT = 15
 local AURA_RANGE = 120
-local RAID_TYPE = "Flame"    -- Flame, Ice, Quake, Light, Dark, Spider, Rumble, Magma, Buddha, Sand, Phoenix, Dough
+local RAID_TYPE = "Flame"
 local BUY_WITH_FRUIT = false
 
 local AIM = {
@@ -45,8 +45,8 @@ local AIM = {
     TeamCheck = true,
     WallCheck = true,
     MaxDistance = 1000,
-    TargetNPCs = true,       -- workspace.Enemies
-    TargetPlayers = false,   -- set true to also aim at other players
+    TargetNPCs = true,
+    TargetPlayers = false,
     HoldKey = Enum.UserInputType.MouseButton2,
     AimToggleKey = Enum.KeyCode.RightControl,
     CircleToggleKey = Enum.KeyCode.RightShift,
@@ -58,12 +58,21 @@ local LOOP = {
     KeyDelay = 0.15,
     LoopDelay = 0.30,
 }
+local REROLL = {
+    WantedRaces = {"Ghoul", "Cyborg"},  -- stops when your race matches any of these
+    Args = nil,                         -- filled by "Capture Reroll", or set manually e.g. {"YourRemoteArg", "Reroll"}
+    Delay = 2.0,                        -- seconds between rerolls
+    Cost = 3000,                        -- fragments per reroll; 0 disables the fragment check
+}
 env.VOIDX_AIM = AIM
 env.VOIDX_LOOP = LOOP
+env.VOIDX_REROLL = REROLL
 
 -- ============ STATE ============
 local statusText = "Idle"
+local rerollText = ""
 local function setStatus(s) statusText = s end
+local function setRerollStatus(s) rerollText = s end
 
 local target
 local aimOn, loopOn, circleOn = false, false, true
@@ -72,6 +81,7 @@ local lockedTarget
 local connections = {}
 local refreshers = {}
 local circle, ring
+local capturing = false
 
 local function track(c) table.insert(connections, c) return c end
 local function syncAll() for _, r in ipairs(refreshers) do r() end end
@@ -107,12 +117,12 @@ end
 
 if not parentGui(gui) then warn("[VOID X] Could not parent GUI.") end
 
-local FULL_H = 292
+local FULL_H = 372
 
 local main = Instance.new("Frame")
 main.Name = "Main"
 main.Size = UDim2.new(0, 200, 0, FULL_H)
-main.Position = UDim2.new(0, 20, 0.2, 0)
+main.Position = UDim2.new(0, 20, 0.15, 0)
 main.BackgroundColor3 = BLACK
 main.BorderSizePixel = 0
 main.Active = true
@@ -138,7 +148,7 @@ titleLabel.Font = Enum.Font.GothamBlack
 titleLabel.TextSize = 16
 titleLabel.TextColor3 = PINK
 titleLabel.TextXAlignment = Enum.TextXAlignment.Left
-titleLabel.Text = "VOID X"
+titleLabel.Text = "VOID X v5"
 titleLabel.Parent = title
 
 local minBtn = Instance.new("TextButton")
@@ -163,7 +173,6 @@ local layout = Instance.new("UIListLayout", body)
 layout.Padding = UDim.new(0, 6)
 layout.SortOrder = Enum.SortOrder.LayoutOrder
 
--- Generic toggle: get() reads state, set(v) changes it
 local function makeToggle(text, order, get, set)
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, 0, 0, 36)
@@ -191,6 +200,24 @@ local function makeToggle(text, order, get, set)
     end)
 end
 
+local function makeActionButton(text, order, onClick)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 30)
+    btn.LayoutOrder = order
+    btn.BackgroundColor3 = PANEL
+    btn.TextColor3 = PURPLE
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 13
+    btn.Text = text
+    btn.Parent = body
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+    local s = Instance.new("UIStroke", btn)
+    s.Color = PURPLE
+    s.Thickness = 1
+    btn.MouseButton1Click:Connect(function() onClick(btn) end)
+    return btn
+end
+
 local function idleIfNothingOn()
     if not (env.AutoFarmNearest or env.AutoRaid) then setStatus("Idle") end
 end
@@ -215,20 +242,38 @@ makeToggle("FOV Circle", 5,
     function() return circleOn end,
     function(v) circleOn = v end)
 
+makeToggle("Race Reroll", 6,
+    function() return env.AutoReroll end,
+    function(v)
+        env.AutoReroll = v
+        if not v then setRerollStatus("") end
+    end)
+
+local captureBtn = makeActionButton("Capture Reroll", 7, function(btn)
+    if not (hookmetamethod and getnamecallmethod) then
+        setRerollStatus("Capture needs hookmetamethod")
+        return
+    end
+    capturing = true
+    btn.Text = "Reroll once by hand..."
+    setRerollStatus("Waiting for a manual reroll")
+end)
+
 local statusLabel = Instance.new("TextLabel")
-statusLabel.Size = UDim2.new(1, 0, 0, 36)
-statusLabel.LayoutOrder = 6
+statusLabel.Size = UDim2.new(1, 0, 0, 52)
+statusLabel.LayoutOrder = 8
 statusLabel.BackgroundTransparency = 1
 statusLabel.Font = Enum.Font.Gotham
 statusLabel.TextSize = 12
 statusLabel.TextColor3 = Color3.fromRGB(190, 170, 255)
 statusLabel.TextWrapped = true
+statusLabel.TextYAlignment = Enum.TextYAlignment.Top
 statusLabel.Text = "Loading..."
 statusLabel.Parent = body
 
 task.spawn(function()
     while alive() and gui.Parent do
-        statusLabel.Text = statusText
+        statusLabel.Text = statusText .. (rerollText ~= "" and ("\n" .. rerollText) or "")
         task.wait(0.3)
     end
 end)
@@ -241,7 +286,6 @@ minBtn.MouseButton1Click:Connect(function()
     main.Size = minimized and UDim2.new(0, 200, 0, 34) or UDim2.new(0, 200, 0, FULL_H)
 end)
 
--- Dragging (title bar, mouse + touch)
 local dragging, dragStart, startPos, dragInput
 title.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1
@@ -577,10 +621,86 @@ local function currentIsland()
     end
 end
 
+-- ============ RACE REROLL ============
+local function getRace()
+    local ok, v = pcall(function() return player.Data.Race.Value end)
+    return ok and tostring(v) or nil
+end
+
+local function getFragments()
+    local ok, v = pcall(function() return player.Data.Fragments.Value end)
+    return ok and tonumber(v) or nil
+end
+
+local function raceWanted(race)
+    if not race then return false end
+    race = race:lower()
+    for _, want in ipairs(REROLL.WantedRaces) do
+        if race == want:lower() then return true end
+    end
+    return false
+end
+
+-- Records the CommF_ call the game makes during one manual reroll.
+-- The hook stays installed after cleanup but does nothing unless capturing is true.
+if hookmetamethod and getnamecallmethod then
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+        if capturing and alive() and self == CommF and getnamecallmethod() == "InvokeServer" then
+            local args = {...}
+            capturing = false
+            REROLL.Args = args
+            local parts = {}
+            for i, a in ipairs(args) do parts[i] = tostring(a) end
+            print("[VOID X] Captured reroll args: " .. table.concat(parts, ", "))
+            task.defer(function()
+                setRerollStatus("Captured: " .. table.concat(parts, ", "))
+                captureBtn.Text = "Capture Reroll"
+            end)
+        end
+        return oldNamecall(self, ...)
+    end)
+end
+
+task.spawn(function()
+    while alive() do
+        task.wait(REROLL.Delay)
+        if env.AutoReroll then
+            pcall(function()
+                local race = getRace()
+                if raceWanted(race) then
+                    env.AutoReroll = false
+                    setRerollStatus("Got " .. tostring(race) .. ", stopped")
+                    syncAll()
+                    return
+                end
+                if not CommF then
+                    setRerollStatus("CommF_ not found")
+                    return
+                end
+                if not REROLL.Args then
+                    env.AutoReroll = false
+                    setRerollStatus("No args: press Capture Reroll")
+                    syncAll()
+                    return
+                end
+                local frags = getFragments()
+                if REROLL.Cost > 0 and frags and frags < REROLL.Cost then
+                    env.AutoReroll = false
+                    setRerollStatus("Out of fragments (" .. frags .. ")")
+                    syncAll()
+                    return
+                end
+                setRerollStatus("Rerolling. Race: " .. tostring(race))
+                CommF:InvokeServer(unpack(REROLL.Args))
+            end)
+        end
+    end
+end)
+
 -- ============ MODE LOGIC ============
 local raidActive = false
 
--- AutoRaid takes priority. It only fights while a raid is active.
 local function combatMode()
     if env.AutoRaid then
         return raidActive and "raid" or nil
@@ -599,7 +719,6 @@ task.spawn(function()
     end
 end)
 
--- Hover loop
 env.VOIDX_HB = RunService.Heartbeat:Connect(function()
     if not alive() then return end
     local mode = combatMode()
@@ -627,7 +746,6 @@ env.VOIDX_HB = RunService.Heartbeat:Connect(function()
     end
 end)
 
--- Attack loop
 task.spawn(function()
     while alive() do
         if combatMode() and target and isAlive(target) then
@@ -638,7 +756,6 @@ task.spawn(function()
     end
 end)
 
--- Raid loop (AutoRaid only)
 task.spawn(function()
     while alive() do
         task.wait(0.5)
@@ -682,13 +799,15 @@ env.VOIDX_CLEANUP = function()
     env.VOIDX_TOKEN = nil
     env.AutoFarmNearest = false
     env.AutoRaid = false
+    env.AutoReroll = false
+    capturing = false
     aimOn, loopOn = false, false
     for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
     if env.VOIDX_HB then pcall(function() env.VOIDX_HB:Disconnect() end) end
     if circle then pcall(function() circle:Remove() end) end
     if circleGui then pcall(function() circleGui:Destroy() end) end
     pcall(function() gui:Destroy() end)
-    env.VOIDX_AIM, env.VOIDX_LOOP = nil, nil
+    env.VOIDX_AIM, env.VOIDX_LOOP, env.VOIDX_REROLL = nil, nil, nil
 end
 
 if statusText == "Loading..." and CommF then setStatus("Idle") end
