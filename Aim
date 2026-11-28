@@ -1,0 +1,305 @@
+-- aim.lua | FOV circle + aim assist + AIM button + hotkeys (players + NPCs)
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+local player = Players.LocalPlayer
+while not player do task.wait() player = Players.LocalPlayer end
+local camera = workspace.CurrentCamera
+local env = (getgenv and getgenv()) or _G
+
+for _, name in ipairs({"AIMONLY_CLEANUP", "VOIDX_CLEANUP", "COMBO_CLEANUP", "FOV_CLEANUP"}) do
+    if env[name] then pcall(env[name]) end
+end
+local TOKEN = {}
+env.AIMONLY_TOKEN = TOKEN
+local function alive() return env.AIMONLY_TOKEN == TOKEN end
+
+-- ============ SETTINGS ============
+local AIM = {
+    Radius = 120,
+    Thickness = 2,
+    Color = Color3.fromRGB(150, 60, 255),
+    LockedColor = Color3.fromRGB(0, 255, 140),
+    FollowMouse = false,          -- PC only; touch always uses screen center
+    TargetPart = "Head",          -- "Head", "HumanoidRootPart", "UpperTorso"
+    Smoothness = 0.25,            -- 1 = snap, lower = smoother
+    TeamCheck = true,
+    WallCheck = true,
+    MaxDistance = 1000,
+    TargetPlayers = true,
+    TargetNPCs = true,
+    NPCFolder = "Enemies",        -- workspace folder holding NPCs
+    IgnoreNames = {"jjskillstouse", "hellomebigback"},
+
+    HoldKey = Enum.UserInputType.MouseButton2,   -- hold to aim (PC)
+    AimToggleKey = Enum.KeyCode.RightControl,    -- latch aim on/off
+    CircleToggleKey = Enum.KeyCode.RightShift,   -- show/hide circle
+    ShowButton = true,
+}
+AIM.Ignore = function(name) table.insert(AIM.IgnoreNames, name) end
+env.AIMONLY = AIM
+
+-- ============ STATE ============
+local aimOn, circleOn, rmbHeld = false, true, false
+local lockedTarget
+local connections, guis = {}, {}
+local circle, ring
+local refreshButton
+
+local function track(c) table.insert(connections, c) return c end
+
+local function parentGui(g)
+    for _, fn in ipairs({
+        function() if gethui then g.Parent = gethui() end end,
+        function() if syn and syn.protect_gui then syn.protect_gui(g) end g.Parent = game:GetService("CoreGui") end,
+        function() g.Parent = game:GetService("CoreGui") end,
+        function() g.Parent = player:WaitForChild("PlayerGui", 10) end,
+    }) do
+        pcall(fn)
+        if g.Parent then return true end
+    end
+    return false
+end
+
+local function newGui(name, order)
+    local g = Instance.new("ScreenGui")
+    g.Name = name
+    g.ResetOnSpawn = false
+    g.IgnoreGuiInset = true
+    g.DisplayOrder = order or 999999
+    parentGui(g)
+    table.insert(guis, g)
+    return g
+end
+
+-- ============ FOV CIRCLE ============
+if Drawing and Drawing.new then
+    circle = Drawing.new("Circle")
+    circle.NumSides = 64
+    circle.ZIndex = 999
+else
+    local g = newGui("AimCircle", 999998)
+    ring = Instance.new("Frame")
+    ring.AnchorPoint = Vector2.new(0.5, 0.5)
+    ring.BackgroundTransparency = 1
+    ring.BorderSizePixel = 0
+    ring.Parent = g
+    Instance.new("UICorner", ring).CornerRadius = UDim.new(1, 0)
+    Instance.new("UIStroke", ring).Name = "Stroke"
+end
+
+local function screenPoint()
+    if AIM.FollowMouse and not UserInputService.TouchEnabled then
+        return UserInputService:GetMouseLocation()
+    end
+    local vp = camera.ViewportSize
+    return Vector2.new(vp.X / 2, vp.Y / 2)
+end
+
+local function drawCircle(pos, color)
+    if circle then
+        circle.Visible = circleOn
+        circle.Position = pos
+        circle.Radius = AIM.Radius
+        circle.Thickness = AIM.Thickness
+        circle.Color = color
+        circle.Filled = false
+        circle.Transparency = 1
+    else
+        ring.Visible = circleOn
+        ring.Position = UDim2.fromOffset(pos.X, pos.Y)
+        ring.Size = UDim2.fromOffset(AIM.Radius * 2, AIM.Radius * 2)
+        local st = ring:FindFirstChild("Stroke")
+        st.Color = color
+        st.Thickness = AIM.Thickness
+    end
+end
+
+-- ============ AIM BUTTON (tap = toggle, drag = move) ============
+local GREEN = Color3.fromRGB(0, 255, 140)
+local RED = Color3.fromRGB(255, 70, 90)
+local PURPLE = Color3.fromRGB(150, 60, 255)
+
+if AIM.ShowButton then
+    local g = newGui("AimButton")
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.fromOffset(70, 70)
+    btn.Position = UDim2.new(1, -100, 0.5, -35)
+    btn.BackgroundColor3 = Color3.fromRGB(22, 20, 30)
+    btn.BackgroundTransparency = 0.15
+    btn.Font = Enum.Font.GothamBlack
+    btn.TextSize = 14
+    btn.AutoButtonColor = false
+    btn.Active = true
+    btn.Parent = g
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(1, 0)
+    local stroke = Instance.new("UIStroke", btn)
+    stroke.Thickness = 2
+
+    refreshButton = function()
+        btn.Text = aimOn and "AIM\nON" or "AIM\nOFF"
+        btn.TextColor3 = aimOn and GREEN or RED
+        stroke.Color = aimOn and GREEN or PURPLE
+    end
+    refreshButton()
+
+    local pressing, moved, dragStart, startPos, activeInput
+    btn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch
+            or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            pressing, moved = true, false
+            dragStart, startPos, activeInput = input.Position, btn.Position, input
+        end
+    end)
+    track(UserInputService.InputChanged:Connect(function(input)
+        if pressing and (input == activeInput or input.UserInputType == Enum.UserInputType.MouseMovement) then
+            local d = input.Position - dragStart
+            if d.Magnitude > 8 then moved = true end
+            if moved then
+                btn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
+                    startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            end
+        end
+    end))
+    track(UserInputService.InputEnded:Connect(function(input)
+        if pressing and (input == activeInput or input.UserInputType == Enum.UserInputType.MouseButton1) then
+            pressing = false
+            if not moved then
+                aimOn = not aimOn
+                refreshButton()
+            end
+        end
+    end))
+end
+
+-- ============ TARGETING ============
+local function isVisible(part, model)
+    local origin = camera.CFrame.Position
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {player.Character, model}
+    params.IgnoreWater = true
+    return workspace:Raycast(origin, part.Position - origin, params) == nil
+end
+
+local function isIgnored(model)
+    local owner = Players:GetPlayerFromCharacter(model)
+    local names = {model.Name:lower()}
+    if owner then
+        table.insert(names, owner.Name:lower())
+        table.insert(names, owner.DisplayName:lower())
+    end
+    for _, ignored in ipairs(AIM.IgnoreNames) do
+        local want = ignored:lower()
+        for _, n in ipairs(names) do
+            if n == want then return true end
+        end
+    end
+    return false
+end
+
+local function isSelf(model)
+    local myChar = player.Character
+    if not myChar then return false end
+    return model == myChar
+        or model:IsDescendantOf(myChar)
+        or myChar:IsDescendantOf(model)
+        or model.Name == player.Name
+end
+
+local function candidateModels()
+    local list = {}
+    if AIM.TargetPlayers then
+        for _, p in ipairs(Players:GetPlayers()) do
+            local char = p.Character
+            if p ~= player and char and not isSelf(char) and not isIgnored(char) then
+                if not (AIM.TeamCheck and p.Team ~= nil and p.Team == player.Team) then
+                    table.insert(list, char)
+                end
+            end
+        end
+    end
+    if AIM.TargetNPCs then
+        local folder = workspace:FindFirstChild(AIM.NPCFolder)
+        if folder then
+            for _, m in ipairs(folder:GetChildren()) do
+                if not isSelf(m) and not isIgnored(m) then
+                    table.insert(list, m)
+                end
+            end
+        end
+    end
+    return list
+end
+
+local function getTarget(center)
+    local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return nil end
+    local best, bestDist = nil, AIM.Radius
+    for _, model in ipairs(candidateModels()) do
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        local part = model:FindFirstChild(AIM.TargetPart) or model:FindFirstChild("HumanoidRootPart")
+        if hum and hum.Health > 0 and part
+            and (part.Position - myRoot.Position).Magnitude <= AIM.MaxDistance then
+            local sp, onScreen = camera:WorldToScreenPoint(part.Position)
+            if onScreen then
+                local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+                if d <= bestDist and (not AIM.WallCheck or isVisible(part, model)) then
+                    best, bestDist = part, d
+                end
+            end
+        end
+    end
+    return best
+end
+
+-- ============ MAIN LOOP ============
+track(RunService.RenderStepped:Connect(function()
+    if not alive() then return end
+    camera = workspace.CurrentCamera
+    local center = screenPoint()
+    lockedTarget = nil
+    if aimOn or rmbHeld then
+        lockedTarget = getTarget(center)
+        if lockedTarget then
+            local goal = CFrame.new(camera.CFrame.Position, lockedTarget.Position)
+            camera.CFrame = camera.CFrame:Lerp(goal, math.clamp(AIM.Smoothness, 0.01, 1))
+        end
+    end
+    drawCircle(center, lockedTarget and AIM.LockedColor or AIM.Color)
+end))
+
+-- ============ HOTKEYS ============
+track(UserInputService.InputBegan:Connect(function(input, processed)
+    if input.UserInputType == AIM.HoldKey or input.KeyCode == AIM.HoldKey then
+        rmbHeld = true
+    end
+    if processed or UserInputService:GetFocusedTextBox() then return end
+    if input.KeyCode == AIM.CircleToggleKey then
+        circleOn = not circleOn
+    elseif input.KeyCode == AIM.AimToggleKey then
+        aimOn = not aimOn
+        if refreshButton then refreshButton() end
+    end
+end))
+
+track(UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == AIM.HoldKey or input.KeyCode == AIM.HoldKey then
+        rmbHeld = false
+    end
+end))
+
+-- ============ CLEANUP ============
+env.AIMONLY_CLEANUP = function()
+    env.AIMONLY_TOKEN = nil
+    aimOn = false
+    for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
+    if circle then pcall(function() circle:Remove() end) end
+    for _, g in ipairs(guis) do pcall(function() g:Destroy() end) end
+    env.AIMONLY = nil
+end
+
+print("[AIM] Loaded. Hold RMB or tap AIM. RightCtrl = latch, RightShift = circle.")
